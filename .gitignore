@@ -1,0 +1,122 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+.virtualenv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+import.log
+alembic.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# SQL dumps and backups
+*.sql
+*.bak
+*.backup
+
+# Test coverage
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# Models directory (contains uploaded Excel files)
+models/
+
+# Excel files (except samples)
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Alembic
+alembic/versions/__pycache__/
+alembic/versions/*.pyc
+alembic/__pycache__/
+
+# Node modules (if HyperFormula installed locally)
+node_modules/
+package-lock.json
+package.json
+
+# Python version management
+.python-version
+.pyenv
+
+# Jupyter notebooks (if any)
+.ipynb_checkpoints/
+*.ipynb
+
+# Documentation that was removed (avoid regenerating)
+NEXT_STEPS.md
+docs/FIXES.md
+docs/IMPLEMENTATION_STATUS.md
+docs/README.md
+
+# Mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Profiling
+*.prof

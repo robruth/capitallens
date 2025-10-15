@@ -1,0 +1,21 @@
+# Core dependencies
+SQLAlchemy>=2.0.0
+alembic>=1.12.0
+psycopg2-binary>=2.9.9
+python-dotenv>=1.0.0
+
+# Excel parsing and evaluation
+openpyxl>=3.1.2
+# Note: pycel has dependency conflict with networkx
+# TODO: Add pycel support in future (requires networkx<2.7)
+# For now, pycel integration is planned but not required
+
+# CLI
+click>=8.1.7
+
+# Testing
+pytest>=7.4.3
+pytest-cov>=4.1.0
+
+# Utilities
+networkx>=3.2.1
