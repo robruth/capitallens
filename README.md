@@ -15,18 +15,21 @@ A production-ready Python CLI for importing datacenter and GPU-as-a-Service Exce
 ## 🚀 Quick Start
 
 ```bash
-# 1. Install dependencies
+# 1. Setup VENV
+python3 -m venv venv && source venv/bin/activate
+
+# 2. Install dependencies
 pip install -r requirements.txt
 npm install -g hyperformula
 
-# 2. Configure environment
+# 3. Configure environment
 cp .env.example .env
 # Edit .env: DATABASE_URL=postgresql://postgres:s3cr3t@localhost/dcmodel
 
-# 3. Set up database
+# 4. Set up database
 alembic upgrade head
 
-# 4. Import Excel file
+# 5. Import Excel file
 python scripts/excel_importer.py import \
   --file dcmodel_template_hf_final_v32.xlsx \
   --name "DC Model" \
