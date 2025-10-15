@@ -78,8 +78,9 @@ class Model(Base):
         comment='Import statistics: matches, mismatches, errors'
     )
     
-    # Relationship to cells
+    # Relationships
     cells = relationship('Cell', back_populates='model', cascade='all, delete-orphan')
+    jobs = relationship('JobRun', back_populates='model')
     
     def __repr__(self):
         return f"<Model(id={self.id}, name='{self.name}', file_hash='{self.file_hash[:8]}...')>"
