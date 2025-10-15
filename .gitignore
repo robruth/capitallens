@@ -65,9 +65,6 @@ htmlcov/
 .tox/
 .nox/
 
-# Models directory (contains uploaded Excel files)
-models/
-
 # Excel files (except samples)
 *.xlsx
 *.xls
