@@ -72,7 +72,10 @@ process.stdin.on('end', () => {
             // Date settings for proper date handling
             nullDate: { year: 1899, month: 12, day: 30 },
             // Error handling
-            smartRounding: true
+            smartRounding: true,
+            // Enable iterative calculation for circular references
+            useStats: true,
+            evaluateNullToZero: true
         };
         
         const hf = HyperFormula.buildEmpty(hfOptions);
@@ -141,9 +144,12 @@ process.stdin.on('end', () => {
                 } else if (typeof cellValue === 'boolean') {
                     resultType = 'boolean';
                     resultValue = cellValue;
-                } else if (cellValue && cellValue.type === 'ERROR') {
-                    resultType = 'error';
-                    resultValue = cellValue.value || 'ERROR';
+                } else if (cellValue && typeof cellValue === 'object') {
+                    // Handle HyperFormula error objects (ERROR, CYCLE, etc.)
+                    if (cellValue.type === 'ERROR' || cellValue.type === 'CYCLE') {
+                        resultType = 'error';
+                        resultValue = cellValue.value || cellValue.type || 'ERROR';
+                    }
                 }
                 
                 return {

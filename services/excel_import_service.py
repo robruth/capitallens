@@ -113,9 +113,8 @@ class CircularSolver:
             max_change = 0.0
             
             for cell_ref in circular_cells:
-                if cell_ref in converged_cells:
-                    new_values[cell_ref] = values[cell_ref]
-                    continue
+                # Note: Don't skip "converged" cells - in circular references,
+                # all cells must continue evaluating together even if individually stable
                 
                 try:
                     # Evaluate with current context
@@ -135,10 +134,14 @@ class CircularSolver:
                         change = abs(result - values[cell_ref])
                         max_change = max(max_change, change)
                         
-                        # Mark as converged if within threshold
+                        # Track converged cells for logging, but don't skip them
                         if change < self.threshold:
-                            converged_cells.add(cell_ref)
-                            logger.debug(f"Cell {cell_ref} converged (change: {change:.2e})")
+                            if cell_ref not in converged_cells:
+                                converged_cells.add(cell_ref)
+                                logger.debug(f"Cell {cell_ref} converged (change: {change:.2e})")
+                        else:
+                            # Cell started changing again, remove from converged set
+                            converged_cells.discard(cell_ref)
                     
                 except Exception as e:
                     logger.error(f"Error evaluating circular cell {cell_ref}: {e}")
@@ -149,8 +152,8 @@ class CircularSolver:
             logger.debug(f"Iteration {iteration + 1}: max_change={max_change:.2e}, "
                         f"converged={len(converged_cells)}/{len(circular_cells)}")
             
-            # Check global convergence
-            if max_change < self.threshold or len(converged_cells) == len(circular_cells):
+            # Check global convergence based on max change across all cells
+            if max_change < self.threshold:
                 logger.info(f"Converged after {iteration + 1} iterations")
                 return values, 'converged', iteration + 1
         
@@ -278,6 +281,245 @@ class ExcelImportService:
         """Emit progress update via callback."""
         self.progress_callback(stage, percent, message)
         logger.info(f"Progress: {stage} ({percent:.1f}%) - {message}")
+    
+    def _topological_sort_formulas(self, cells_data: List[Dict]) -> List[List[Dict]]:
+        """
+        Sort formula cells in dependency order using topological sort.
+        
+        Returns batches of cells that can be evaluated in parallel.
+        Cells in the same batch have no dependencies on each other.
+        
+        Algorithm:
+            1. Build dependency graph (excluding circular cells)
+            2. Use Kahn's algorithm for topological sort
+            3. Group cells by evaluation level (batch)
+        
+        Args:
+            cells_data: All cell data dictionaries (non-circular formulas only)
+            
+        Returns:
+            List of batches, where each batch is a list of cells
+            that can be evaluated in parallel
+        """
+        if not cells_data:
+            return []
+        
+        # Build cell reference lookup
+        cell_lookup = {}
+        for cell in cells_data:
+            cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
+            cell_lookup[cell_ref] = cell
+        
+        # Build in-degree map (how many dependencies each cell has)
+        in_degree = {}
+        for cell in cells_data:
+            cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
+            in_degree[cell_ref] = 0
+        
+        # Count dependencies
+        for cell in cells_data:
+            cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
+            depends_on = cell.get('depends_on', [])
+            
+            # Only count dependencies that are in our cell set (non-circular formulas)
+            for dep in depends_on:
+                if dep in cell_lookup:
+                    in_degree[cell_ref] += 1
+        
+        # Initialize queue with cells that have no dependencies
+        queue = [cell for cell in cells_data if in_degree[f"{cell['sheet_name']}!{cell['cell']}"] == 0]
+        batches = []
+        
+        # Process cells level by level (Kahn's algorithm)
+        while queue:
+            # All cells in current queue can be evaluated in parallel (same batch)
+            current_batch = queue[:]
+            batches.append(current_batch)
+            queue = []
+            
+            # Process each cell in current batch
+            for cell in current_batch:
+                cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
+                
+                # Find cells that depend on this cell
+                for other_cell in cells_data:
+                    other_ref = f"{other_cell['sheet_name']}!{other_cell['cell']}"
+                    depends_on = other_cell.get('depends_on', [])
+                    
+                    if cell_ref in depends_on:
+                        in_degree[other_ref] -= 1
+                        
+                        # If all dependencies are satisfied, add to next batch
+                        if in_degree[other_ref] == 0 and other_cell not in current_batch:
+                            queue.append(other_cell)
+        
+        logger.info(f"Topological sort: {len(batches)} evaluation batches")
+        for i, batch in enumerate(batches[:5]):  # Log first 5 batches
+            logger.debug(f"Batch {i}: {len(batch)} cells")
+        
+        return batches
+    
+    def _build_hyperformula_sheets(self, cells_data: List[Dict]) -> List[Dict]:
+        """
+        Build HyperFormula sheets data structure from parsed cells.
+        
+        Converts cell data to format expected by hyperformula_wrapper.js:
+        {
+            "name": "Sheet1",
+            "cells": [
+                {"row": 0, "col": 0, "formula": "=SUM(B1:B10)"},
+                {"row": 0, "col": 1, "value": 5},
+                {"row": 1, "col": 1, "value": 10}
+            ]
+        }
+        
+        Args:
+            cells_data: All parsed cell data
+            
+        Returns:
+            List of sheet dictionaries ready for HyperFormula
+        """
+        # Group cells by sheet
+        sheets_dict = {}
+        
+        for cell in cells_data:
+            sheet_name = cell['sheet_name']
+            
+            if sheet_name not in sheets_dict:
+                sheets_dict[sheet_name] = {
+                    'name': sheet_name,
+                    'cells': []
+                }
+            
+            # Convert cell address to coordinates
+            try:
+                row, col = self.parser.cell_to_coordinates(cell['cell'])
+                
+                # Add cell to sheet
+                if cell.get('formula') and cell['cell_type'] != 'formula_text':
+                    # Formula cell
+                    sheets_dict[sheet_name]['cells'].append({
+                        'row': row,
+                        'col': col,
+                        'formula': cell['formula']
+                    })
+                elif cell.get('raw_value') is not None:
+                    # Numeric value cell (needed for formula dependencies)
+                    sheets_dict[sheet_name]['cells'].append({
+                        'row': row,
+                        'col': col,
+                        'value': float(cell['raw_value'])
+                    })
+                elif cell.get('raw_text') is not None:
+                    # Text value cell (needed for IF conditions, string comparisons, etc.)
+                    sheets_dict[sheet_name]['cells'].append({
+                        'row': row,
+                        'col': col,
+                        'value': cell['raw_text']
+                    })
+                # Note: Skip text formulas (formula_text type)
+                
+            except Exception as e:
+                logger.warning(f"Could not convert cell {sheet_name}!{cell['cell']}: {e}")
+                continue
+        
+        # Convert to list
+        sheets_list = list(sheets_dict.values())
+        
+        logger.info(f"Built HyperFormula sheets: {len(sheets_list)} sheets, "
+                   f"{sum(len(s['cells']) for s in sheets_list)} cells")
+        
+        return sheets_list
+    
+    def _batch_evaluate_hyperformula(
+        self,
+        sheets_data: List[Dict],
+        cells_to_evaluate: List[Dict],
+        cache: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """
+        Batch evaluate formulas using HyperFormula.
+        
+        Args:
+            sheets_data: HyperFormula sheets structure
+            cells_to_evaluate: Cells to evaluate in this batch
+            cache: Dictionary to cache evaluated values
+            
+        Returns:
+            Dictionary mapping cell_ref to evaluated value/error
+            
+        Error Handling:
+            - HyperFormula errors (#DIV/0!, #REF!, etc.) → return None
+            - Evaluation failures → return None
+            - Success → return numeric value
+        """
+        if not cells_to_evaluate:
+            return {}
+        
+        # Build queries for this batch
+        queries = []
+        for cell in cells_to_evaluate:
+            cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
+            
+            # Skip if already cached
+            if cell_ref in cache:
+                continue
+            
+            try:
+                row, col = self.parser.cell_to_coordinates(cell['cell'])
+                queries.append({
+                    'sheet': cell['sheet_name'],
+                    'row': row,
+                    'col': col,
+                    'cell': cell_ref
+                })
+            except Exception as e:
+                logger.error(f"Could not create query for {cell_ref}: {e}")
+                continue
+        
+        if not queries:
+            # All cells were cached
+            return cache
+        
+        # Call HyperFormula
+        logger.debug(f"Evaluating {len(queries)} formulas via HyperFormula")
+        result = self.hf_evaluator.evaluate_batch(sheets_data, queries)
+        
+        if not result.get('success'):
+            logger.error(f"HyperFormula batch evaluation failed: {result.get('error')}")
+            # Return None for all cells in batch
+            for query in queries:
+                cache[query['cell']] = None
+            return cache
+        
+        # Process results
+        for res in result.get('results', []):
+            cell_ref = res['cell']
+            
+            if res['type'] == 'number':
+                # Successful numeric evaluation
+                cache[cell_ref] = float(res['value'])
+            elif res['type'] == 'error':
+                # Excel error (#DIV/0!, #REF!, #VALUE!, etc.)
+                error_value = res.get('value', 'ERROR')
+                error_msg = res.get('error', '')
+                
+                # Log based on error severity
+                if error_value in ['#DIV/0!', '#NULL!']:
+                    logger.warning(f"Formula error in {cell_ref}: {error_value}")
+                elif error_value in ['#REF!', '#NAME?']:
+                    logger.error(f"Formula error in {cell_ref}: {error_value} - {error_msg}")
+                else:
+                    logger.info(f"Formula error in {cell_ref}: {error_value}")
+                
+                cache[cell_ref] = None
+                self.stats['errors'] += 1
+            else:
+                # Empty or unexpected type
+                logger.warning(f"Unexpected result type for {cell_ref}: {res['type']}")
+                cache[cell_ref] = None
+        
+        return cache
     
     def compute_file_hash(self, file_path: str) -> str:
         """Compute SHA256 hash of file."""
@@ -672,12 +914,20 @@ class ExcelImportService:
     
     def evaluate_formulas(self, cells_data: List[Dict]):
         """
-        Evaluate all formulas and set calculation_engine, converted_formula, calculated_value.
+        Evaluate all formulas using HyperFormula with proper dependency ordering.
         
-        This implements the core evaluation pipeline with progress tracking.
+        This implements the core evaluation pipeline with progress tracking,
+        topological sorting, and batch evaluation for efficiency.
         """
         total_formulas = self.stats['formula_cells'] + self.stats['formula_text_cells']
         logger.info(f"Evaluating {total_formulas} formula cells...")
+        
+        # Build HyperFormula data structure (include ALL cells for context)
+        self._emit_progress('evaluation', 40, 'Building formula context...')
+        sheets_data = self._build_hyperformula_sheets(cells_data)
+        
+        # Initialize evaluation cache
+        cache = {}
         
         # Build lookup for quick access
         cell_lookup = {}
@@ -699,43 +949,67 @@ class ExcelImportService:
         logger.info(f"Non-circular formulas: {len(non_circular_cells)}, "
                    f"Circular formulas: {len(circular_cells)}")
         
-        # Evaluate non-circular formulas (40-70%)
-        for idx, cell in enumerate(non_circular_cells):
-            if idx % 50 == 0:  # Update every 50 cells
-                progress = 40 + (30 * (idx / max(len(non_circular_cells), 1)))
-                self._emit_progress('evaluation', progress, 
-                                  f"Evaluating formula {idx}/{len(non_circular_cells)}")
-            self._evaluate_single_cell(cell, cell_lookup)
+        # Topological sort for evaluation order (42%)
+        self._emit_progress('evaluation', 42, 'Sorting formulas by dependencies...')
+        evaluation_batches = self._topological_sort_formulas(non_circular_cells)
+        
+        # Evaluate non-circular formulas in dependency order (45-70%)
+        total_batches = len(evaluation_batches)
+        evaluated = 0
+        
+        for batch_idx, batch in enumerate(evaluation_batches):
+            # Progress tracking
+            progress = 45 + (25 * (batch_idx / max(total_batches, 1)))
+            self._emit_progress('evaluation', progress,
+                              f"Evaluating batch {batch_idx+1}/{total_batches} ({len(batch)} formulas)")
+            
+            # Evaluate this batch
+            self._evaluate_batch(batch, sheets_data, cache, cell_lookup)
+            evaluated += len(batch)
         
         # Evaluate circular formulas with iterative solver (70-80%)
         if circular_cells:
             self._emit_progress('evaluation', 70, 'Solving circular references...')
-            self._evaluate_circular_cells(circular_cells, cell_lookup)
+            self._evaluate_circular_cells_hyperformula(
+                circular_cells,
+                sheets_data,
+                cell_lookup,
+                cache
+            )
         
         logger.info("Formula evaluation complete")
     
-    def _evaluate_single_cell(self, cell: Dict, cell_lookup: Dict):
-        """Evaluate a single non-circular formula cell."""
-        formula = cell.get('formula', '')
+    def _evaluate_batch(
+        self,
+        batch: List[Dict],
+        sheets_data: List[Dict],
+        cache: Dict[str, float],
+        cell_lookup: Dict
+    ):
+        """
+        Evaluate a batch of cells using HyperFormula.
         
-        if not formula:
-            return
+        Cells in a batch can be evaluated in parallel since they
+        have no dependencies on each other.
+        """
+        # Separate numeric formulas from text formulas
+        numeric_formulas = []
+        text_formulas = []
         
-        # Classify engine type
-        if self.parser.is_hyperformula_compatible(formula):
-            cell['calculation_engine'] = 'hyperformula'
-            cell['converted_formula'] = formula
-        elif self.parser.is_custom_function(formula):
-            cell['calculation_engine'] = 'custom'
-            cell['converted_formula'] = self.parser.convert_for_custom(formula)
-        else:
-            cell['calculation_engine'] = 'hyperformula'
-            cell['converted_formula'] = formula
-        
-        # Attempt to evaluate
-        try:
+        for cell in batch:
             if cell['cell_type'] == 'formula_text':
-                # Handle text formulas
+                text_formulas.append(cell)
+            else:
+                numeric_formulas.append(cell)
+        
+        # Evaluate text formulas (simple Python evaluation)
+        for cell in text_formulas:
+            formula = cell.get('formula', '')
+            
+            cell['calculation_engine'] = 'hyperformula'
+            cell['converted_formula'] = formula
+            
+            try:
                 result_text = self.parser.evaluate_text_formula(formula)
                 cell['calculated_text'] = result_text
                 cell['calculated_value'] = None
@@ -746,12 +1020,31 @@ class ExcelImportService:
                         self.stats['exact_matches'] += 1
                     else:
                         cell['has_mismatch'] = True
-                        # For text, store length difference as mismatch_diff
                         cell['mismatch_diff'] = float(abs(len(result_text) - len(cell['raw_text'])))
                         self.stats['mismatches'] += 1
-            else:
-                # Try to evaluate numeric formula
-                result_value = self._evaluate_numeric_formula(cell, cell_lookup)
+            except Exception as e:
+                logger.error(f"Text formula evaluation failed for {cell['sheet_name']}!{cell['cell']}: {e}")
+                cell['calculated_text'] = None
+                self.stats['errors'] += 1
+        
+        # Batch evaluate numeric formulas through HyperFormula
+        if numeric_formulas:
+            self._batch_evaluate_hyperformula(sheets_data, numeric_formulas, cache)
+            
+            # Apply results to cells
+            for cell in numeric_formulas:
+                cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
+                result_value = cache.get(cell_ref)
+                
+                # Classify engine type
+                formula = cell.get('formula', '')
+                if self.parser.is_custom_function(formula):
+                    cell['calculation_engine'] = 'custom'
+                    cell['converted_formula'] = self.parser.convert_for_custom(formula)
+                else:
+                    cell['calculation_engine'] = 'hyperformula'
+                    cell['converted_formula'] = formula
+                
                 cell['calculated_value'] = result_value
                 cell['calculated_text'] = None
                 
@@ -766,105 +1059,193 @@ class ExcelImportService:
                         self.stats['exact_matches'] += 1
                     else:
                         self.stats['within_tolerance'] += 1
-        except Exception as e:
-            logger.error(f"Evaluation failed for {cell['sheet_name']}!{cell['cell']}: {e}")
-            cell['calculated_value'] = None
-            cell['calculated_text'] = None
-            self.stats['errors'] += 1
-        
-        # Track stats
-        if cell['calculation_engine'] == 'hyperformula':
-            self.stats['hyperformula_compatible'] += 1
-        elif cell['calculation_engine'] == 'custom':
-            self.stats['python_required'] += 1
+                
+                # Track stats
+                if cell['calculation_engine'] == 'hyperformula':
+                    self.stats['hyperformula_compatible'] += 1
+                elif cell['calculation_engine'] == 'custom':
+                    self.stats['python_required'] += 1
     
-    def _evaluate_numeric_formula(self, cell: Dict, cell_lookup: Dict) -> Optional[float]:
+    def _evaluate_numeric_formula(
+        self,
+        cell: Dict,
+        cell_lookup: Dict,
+        sheets_data: List[Dict],
+        cache: Dict[str, float]
+    ) -> Optional[float]:
         """
-        Evaluate numeric formula.
+        Evaluate numeric formula using HyperFormula.
         
-        For now, uses raw_value as placeholder. Full implementation would use
-        HyperFormula for compatible functions and custom evaluators for others.
+        This replaces the placeholder implementation that used raw_value.
+        
+        Args:
+            cell: Cell data dictionary
+            cell_lookup: All cells indexed by reference
+            sheets_data: HyperFormula sheets structure
+            cache: Evaluation cache
+            
+        Returns:
+            Evaluated numeric value or None on error
         """
         formula = cell.get('formula', '')
+        cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
         
-        # Simple constant formulas
+        # Check cache first
+        if cell_ref in cache:
+            return cache[cell_ref]
+        
+        # Simple constant formulas (fast path)
         if re.match(r'^=\d+(\.\d+)?$', formula):
-            return float(formula[1:])
+            result = float(formula[1:])
+            cache[cell_ref] = result
+            return result
         
-        # For complex formulas, use raw_value as fallback for verification
-        # This is NOT copying - it's using Excel's computed value as reference
-        # The actual evaluation would come from HyperFormula in production
-        if cell.get('raw_value') is not None:
-            logger.debug(f"Using raw_value as placeholder for {cell['sheet_name']}!{cell['cell']} "
-                        f"(formula: {formula[:50]}...)")
-            return float(cell['raw_value'])
-        
-        # If no raw_value, set NULL
-        return None
-    
-    def _evaluate_circular_cells(self, circular_cells: List[Dict], cell_lookup: Dict):
-        """Evaluate circular formulas using iterative solver."""
-        logger.info(f"Evaluating {len(circular_cells)} circular formulas...")
-        
-        # Build list of cell references
-        circular_refs = [f"{c['sheet_name']}!{c['cell']}" for c in circular_cells]
-        
-        # Evaluation function that uses raw_value as reference
-        def evaluate_func(cell_ref: str, values: Dict) -> Optional[float]:
-            """
-            Evaluate circular cell with current context.
-            Uses raw_value as reference since actual formula evaluation
-            requires full HyperFormula/custom implementation.
-            """
-            cell = cell_lookup.get(cell_ref)
-            if not cell:
+        # Evaluate through HyperFormula
+        try:
+            row, col = self.parser.cell_to_coordinates(cell['cell'])
+            
+            result = self.hf_evaluator.evaluate_batch(
+                sheets_data=sheets_data,
+                queries=[{
+                    'sheet': cell['sheet_name'],
+                    'row': row,
+                    'col': col,
+                    'cell': cell_ref
+                }]
+            )
+            
+            if result.get('success') and result['results']:
+                res = result['results'][0]
+                
+                # Handle different result types
+                if res['type'] == 'number':
+                    value = float(res['value'])
+                    cache[cell_ref] = value
+                    return value
+                elif res['type'] == 'error':
+                    # Excel errors: #DIV/0!, #REF!, #VALUE!, etc.
+                    error_value = res.get('value', 'ERROR')
+                    logger.warning(f"Formula error for {cell_ref}: {error_value}")
+                    return None
+                else:
+                    # Empty or unexpected type
+                    return None
+            else:
+                logger.error(f"HyperFormula evaluation failed for {cell_ref}: {result.get('error')}")
                 return None
-            
-            # Use raw_value from Excel as the calculated result
-            # This is acceptable because Excel already computed the circular value
-            # In production, would re-evaluate with HyperFormula/custom engine
-            if cell.get('raw_value') is not None:
-                return float(cell['raw_value'])
-            
-            # If no raw_value, try to return 0 for convergence
-            return 0.0
+                
+        except Exception as e:
+            logger.error(f"Error evaluating {cell_ref}: {e}")
+            return None
+    
+    def _evaluate_circular_cells_hyperformula(
+        self,
+        circular_cells: List[Dict],
+        sheets_data: List[Dict],
+        cell_lookup: Dict,
+        cache: Dict
+    ):
+        """
+        Evaluate circular formulas using HyperFormula's built-in circular reference handling.
         
-        # Run solver
-        results, status, iterations = self.circular_solver.solve(
-            circular_refs,
-            cell_lookup,
-            evaluate_func
-        )
+        HyperFormula has built-in iterative calculation for circular references.
+        We just need to evaluate them normally - HyperFormula handles the iteration internally.
+        """
+        logger.info(f"Evaluating {len(circular_cells)} circular formulas with HyperFormula...")
+        
+        # Build queries for all circular cells
+        queries = []
+        for cell in circular_cells:
+            try:
+                row, col = self.parser.cell_to_coordinates(cell['cell'])
+                cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
+                queries.append({
+                    'sheet': cell['sheet_name'],
+                    'row': row,
+                    'col': col,
+                    'cell': cell_ref
+                })
+            except Exception as e:
+                logger.error(f"Could not create query for circular cell: {e}")
+                continue
+        
+        # Evaluate through HyperFormula (it handles circular references internally)
+        logger.debug(f"Evaluating {len(queries)} circular formulas via HyperFormula")
+        result = self.hf_evaluator.evaluate_batch(sheets_data, queries)
+        
+        if not result.get('success'):
+            logger.error(f"HyperFormula circular evaluation failed: {result.get('error')}")
+            # Set all to custom/None on failure
+            for cell in circular_cells:
+                cell['calculation_engine'] = 'custom'
+                cell['converted_formula'] = cell.get('formula')
+                cell['calculated_value'] = None
+                cell['calculated_text'] = None
+                cell['has_mismatch'] = False  # Not a mismatch - HyperFormula limitation
+                cell['mismatch_diff'] = None
+                self.stats['circular_failed'] += 1
+                self.stats['python_required'] += 1
+            return
+        
+        # Process results
+        values = {}
+        for res in result['results']:
+            cell_ref = res['cell']
+            
+            if res['type'] == 'number':
+                values[cell_ref] = float(res['value'])
+            elif res['type'] == 'error':
+                # Circular references return #CYCLE! errors
+                error_val = res.get('value', 'ERROR')
+                logger.info(f"Circular cell {cell_ref} has error: {error_val}")
+                values[cell_ref] = None
+            else:
+                logger.warning(f"Unexpected type for circular cell {cell_ref}: {res['type']}")
+                values[cell_ref] = None
         
         # Apply results to cells
         for cell in circular_cells:
             cell_ref = f"{cell['sheet_name']}!{cell['cell']}"
-            result = results.get(cell_ref)
+            result_value = values.get(cell_ref)
             
-            cell['calculation_engine'] = 'custom'  # Iterative solver is custom
-            cell['converted_formula'] = cell.get('formula')
-            cell['calculated_value'] = result
-            cell['calculated_text'] = None
-            
-            # Compare with raw_value to detect mismatches
-            if result is not None and cell.get('raw_value') is not None:
-                diff = abs(float(result) - float(cell['raw_value']))
-                if diff > self.tolerance:
-                    cell['has_mismatch'] = True
-                    cell['mismatch_diff'] = float(diff)
-                    self.stats['mismatches'] += 1
-                elif diff < 1e-10:
-                    self.stats['exact_matches'] += 1
-                else:
-                    self.stats['within_tolerance'] += 1
-            
-            if result is not None:
-                self.stats['circular_converged'] += 1
-            else:
+            # Circular cells that HyperFormula can't evaluate are marked as 'custom'
+            if result_value is None:
+                cell['calculation_engine'] = 'custom'
+                cell['converted_formula'] = cell.get('formula')
+                cell['calculated_value'] = None
+                cell['calculated_text'] = None
+                cell['has_mismatch'] = False  # Not a mismatch - just unsupported
+                cell['mismatch_diff'] = None
                 self.stats['circular_failed'] += 1
-                logger.error(f"Failed to converge: {cell_ref}")
+                self.stats['python_required'] += 1
+                logger.debug(f"Circular cell {cell_ref} marked as 'custom' (HyperFormula limitation)")
+            else:
+                # Successfully evaluated circular cell
+                cell['calculation_engine'] = 'hyperformula'
+                cell['converted_formula'] = cell.get('formula')
+                cell['calculated_value'] = result_value
+                cell['calculated_text'] = None
+                
+                # Compare with raw_value for validation
+                if cell.get('raw_value') is not None:
+                    diff = abs(float(result_value) - float(cell['raw_value']))
+                    if diff > self.tolerance:
+                        cell['has_mismatch'] = True
+                        cell['mismatch_diff'] = float(diff)
+                        self.stats['mismatches'] += 1
+                    elif diff < 1e-10:
+                        self.stats['exact_matches'] += 1
+                    else:
+                        self.stats['within_tolerance'] += 1
+                
+                # Track stats and cache
+                self.stats['circular_converged'] += 1
+                self.stats['hyperformula_compatible'] += 1
+                cache[cell_ref] = result_value
         
-        logger.info(f"Circular solver: {status}, iterations: {iterations}")
+        logger.info(f"Circular evaluation complete: {self.stats['circular_converged']} converged, "
+                   f"{self.stats['circular_failed']} failed")
+    
     
     def bulk_insert_cells(self, model_id: int, cells_data: List[Dict]):
         """Bulk insert cells in batches."""

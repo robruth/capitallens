@@ -6,7 +6,7 @@ and formula classification.
 """
 
 import re
-from typing import List
+from typing import List, Tuple, Optional
 
 
 class FormulaParser:
@@ -160,3 +160,148 @@ class FormulaParser:
         
         # For complex text formulas, return None (needs full evaluator)
         return None
+    
+    @staticmethod
+    def cell_to_coordinates(cell_ref: str) -> Tuple[int, int]:
+        """
+        Convert cell reference to zero-based row/col coordinates.
+        
+        Handles standard Excel cell references (A1, B24, AA100, etc.).
+        
+        Examples:
+            A1 → (0, 0)
+            B24 → (23, 1)
+            AA100 → (99, 26)
+            Z1 → (0, 25)
+        
+        Args:
+            cell_ref: Cell address (e.g., "A1", "AA100")
+            
+        Returns:
+            Tuple of (row, col) as zero-based indices
+            
+        Raises:
+            ValueError: If cell reference format is invalid
+        """
+        # Remove sheet name if present (handle "Sheet1!A1" format)
+        if '!' in cell_ref:
+            cell_ref = cell_ref.split('!')[-1]
+        
+        # Match column letters and row number
+        match = re.match(r'^([A-Z]+)(\d+)$', cell_ref.upper())
+        if not match:
+            raise ValueError(f"Invalid cell reference: {cell_ref}")
+        
+        col_letters, row_str = match.groups()
+        
+        # Convert column letters to zero-based index
+        # A=0, B=1, ..., Z=25, AA=26, AB=27, etc.
+        col = 0
+        for char in col_letters:
+            col = col * 26 + (ord(char) - ord('A') + 1)
+        col -= 1  # Convert to zero-based
+        
+        # Convert row to zero-based index
+        row = int(row_str) - 1
+        
+        return (row, col)
+    
+    @staticmethod
+    def coordinates_to_cell(row: int, col: int) -> str:
+        """
+        Convert zero-based coordinates to cell reference.
+        
+        Examples:
+            (0, 0) → A1
+            (23, 1) → B24
+            (99, 26) → AA100
+            (0, 25) → Z1
+        
+        Args:
+            row: Zero-based row index
+            col: Zero-based column index
+            
+        Returns:
+            Cell address string (e.g., "A1", "AA100")
+            
+        Raises:
+            ValueError: If row or col are negative
+        """
+        if row < 0 or col < 0:
+            raise ValueError(f"Row and column must be non-negative: row={row}, col={col}")
+        
+        # Convert column index to letters
+        col_letters = ''
+        col_num = col + 1  # Convert to 1-based for calculation
+        
+        while col_num > 0:
+            col_num -= 1  # Adjust for 0-based alphabet
+            col_letters = chr(ord('A') + (col_num % 26)) + col_letters
+            col_num //= 26
+        
+        # Convert row index to 1-based row number
+        row_num = row + 1
+        
+        return f"{col_letters}{row_num}"
+    
+    @staticmethod
+    def parse_range(range_ref: str) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        """
+        Parse range reference to start/end coordinates.
+        
+        Examples:
+            A1:B10 → ((0, 0), (9, 1))
+            C5:C5 → ((4, 2), (4, 2))
+            AA1:AB100 → ((0, 26), (99, 27))
+        
+        Args:
+            range_ref: Range reference (e.g., "A1:B10", "Sheet1!A1:B10")
+            
+        Returns:
+            Tuple of ((start_row, start_col), (end_row, end_col))
+            
+        Raises:
+            ValueError: If range reference format is invalid
+        """
+        # Remove sheet name if present
+        if '!' in range_ref:
+            range_ref = range_ref.split('!')[-1]
+        
+        # Split range into start and end cells
+        if ':' not in range_ref:
+            raise ValueError(f"Invalid range reference (missing ':'): {range_ref}")
+        
+        parts = range_ref.split(':')
+        if len(parts) != 2:
+            raise ValueError(f"Invalid range reference format: {range_ref}")
+        
+        start_cell, end_cell = parts
+        
+        # Convert both cells to coordinates
+        start_coords = FormulaParser.cell_to_coordinates(start_cell)
+        end_coords = FormulaParser.cell_to_coordinates(end_cell)
+        
+        return (start_coords, end_coords)
+    
+    @staticmethod
+    def parse_cell_reference(cell_ref: str) -> Tuple[Optional[str], str]:
+        """
+        Parse a cell reference into sheet name and cell address.
+        
+        Examples:
+            "A1" → (None, "A1")
+            "Sheet1!A1" → ("Sheet1", "A1")
+            "My Sheet!B5" → ("My Sheet", "B5")
+        
+        Args:
+            cell_ref: Cell reference with optional sheet name
+            
+        Returns:
+            Tuple of (sheet_name, cell_address)
+            sheet_name is None if not specified
+        """
+        if '!' in cell_ref:
+            parts = cell_ref.split('!', 1)
+            return (parts[0], parts[1])
+        else:
+            return (None, cell_ref)
