@@ -106,8 +106,11 @@ capitallens/
 
 ## 🔧 CLI Commands
 
+The CLI supports two modes: **Direct** (local database) and **API** (FastAPI backend).
+
 ### Import Workbook
 
+**Direct Mode (Local Database):**
 ```bash
 python scripts/excel_importer.py import \
   --file <excel-file> \
@@ -115,23 +118,47 @@ python scripts/excel_importer.py import \
   [--validate]
 ```
 
+**API Mode (FastAPI Backend):**
+```bash
+python scripts/excel_importer.py import \
+  --file <excel-file> \
+  --name "Model Name" \
+  --api-url http://localhost:8000 \
+  [--validate]
+```
+
 **Options:**
 - `--file, -f`: Path to Excel file (required)
 - `--name, -n`: Model name for database (required)
-- `--validate`: Run post-import validation
+- `--validate`: Run post-import validation (optional)
+- `--api-url`: FastAPI backend URL (enables API mode, optional)
 
-**Example:**
+**Examples:**
 ```bash
+# Direct mode
 python scripts/excel_importer.py import \
   --file dcmodel_template_hf_final_v32.xlsx \
   --name "DC Model Production" \
+  --validate
+
+# API mode
+python scripts/excel_importer.py import \
+  --file dcmodel_template_hf_final_v32.xlsx \
+  --name "DC Model Production" \
+  --api-url http://localhost:8000 \
   --validate
 ```
 
 ### Validate Existing Model
 
+**Direct Mode:**
 ```bash
 python scripts/excel_importer.py validate --model-id 1
+```
+
+**API Mode:**
+```bash
+python scripts/excel_importer.py validate --model-id 1 --api-url http://localhost:8000
 ```
 
 ### Diagnostic Tools

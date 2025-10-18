@@ -812,6 +812,12 @@ open http://localhost:8000/docs
 
 The CLI can now use `--api-url` flag:
 ```bash
+# Direct mode (local database)
+python scripts/excel_importer.py import \
+  --file model.xlsx \
+  --name "Model Name"
+
+# API mode (FastAPI backend)
 python scripts/excel_importer.py import \
   --file model.xlsx \
   --name "Test" \

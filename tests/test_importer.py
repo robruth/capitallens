@@ -2,14 +2,17 @@
 Tests for Excel importer functionality.
 
 Tests cover parsing, formula evaluation, circular references, and database operations.
+
+NOTE: Updated to import from services after CLI consolidation (2025-01).
 """
 
 import pytest
 from pathlib import Path
-from scripts.excel_importer import (
-    ExcelImporter, FormulaParser, CircularReferenceDetector, 
+from services.excel_import_service import (
+    ExcelImportService, CircularReferenceDetector,
     CircularSolver, HyperFormulaEvaluator
 )
+from services.formula_service import FormulaParser
 from backend.models.schema import Model, Cell
 
 
@@ -178,7 +181,7 @@ class TestExcelImporter:
         if not sample_files['dcmodel'].exists():
             pytest.skip("Sample file not found")
         
-        importer = ExcelImporter(session)
+        importer = ExcelImportService(session)
         hash1 = importer.compute_file_hash(str(sample_files['dcmodel']))
         hash2 = importer.compute_file_hash(str(sample_files['dcmodel']))
         
@@ -190,7 +193,7 @@ class TestExcelImporter:
         if not sample_files['dcmodel'].exists():
             pytest.skip("dcmodel sample file not found")
         
-        importer = ExcelImporter(session)
+        importer = ExcelImportService(session)
         workbook_data = importer.parse_workbook(str(sample_files['dcmodel']))
         
         # Should have at least one sheet
@@ -209,7 +212,7 @@ class TestExcelImporter:
         if not sample_files['gpuaas'].exists():
             pytest.skip("gpuaas sample file not found")
         
-        importer = ExcelImporter(session)
+        importer = ExcelImportService(session)
         workbook_data = importer.parse_workbook(str(sample_files['gpuaas']))
         
         # Should have multiple sheets
@@ -222,7 +225,7 @@ class TestExcelImporter:
     
     def test_cell_type_classification(self, session):
         """Test cell type classification."""
-        importer = ExcelImporter(session)
+        importer = ExcelImportService(session)
         
         # Mock cell with text formula
         class MockCell:
@@ -341,7 +344,7 @@ class TestFullImport:
     )
     def test_import_dcmodel(self, session, sample_files):
         """Test full import of dcmodel sample."""
-        importer = ExcelImporter(session)
+        importer = ExcelImportService(session)
         
         model_id = importer.import_file(
             str(sample_files['dcmodel']),
@@ -373,7 +376,7 @@ class TestFullImport:
     )
     def test_import_gpuaas(self, session, sample_files):
         """Test full import of gpuaas sample."""
-        importer = ExcelImporter(session)
+        importer = ExcelImportService(session)
         
         model_id = importer.import_file(
             str(sample_files['gpuaas']),

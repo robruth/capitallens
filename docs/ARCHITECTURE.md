@@ -401,7 +401,8 @@ capitallens/
 │   └── models/
 │       └── schema.py              # SQLAlchemy models
 ├── scripts/
-│   ├── excel_importer.py          # Main CLI (1,047 lines)
+│   ├── excel_importer.py          # Consolidated Dual-Mode CLI (533 lines)
+│   ├── excel_importer_legacy.py   # Legacy backup (1,056 lines, for reference)
 │   └── hyperformula_wrapper.js    # Node.js interface
 ├── data_repair/
 │   ├── diagnose_nulls.py          # Diagnostic tool
@@ -522,8 +523,10 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-CMD ["python", "scripts/excel_importer.py"]
+CMD ["python", "scripts/excel_importer.py", "import"]
 ```
+
+**Note:** The CLI now supports both direct and API modes via the `--api-url` flag.
 
 ### PostgreSQL Setup
 

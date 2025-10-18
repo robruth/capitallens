@@ -102,23 +102,46 @@ echo '{"sheets":[{"name":"S1","cells":[{"row":0,"col":0,"value":5}]}],"queries":
 
 ## 🎯 First Import
 
-### Import Sample File
+The CLI supports two modes: **Direct** (local database) and **API** (FastAPI backend).
+
+### Import Sample File (Direct Mode)
 
 ```bash
-# Import datacenter model with validation
+# Direct mode - imports directly to local database
 python scripts/excel_importer.py import \
   --file dcmodel_template_hf_final_v32.xlsx \
   --name "DC Model Test" \
   --validate
 
 # Expected output:
+# 💾 Direct Mode: Using local database
 # ✓ Import successful!
 # Model ID: 1
-# 
+#
 # Statistics:
 #   Total cells: 758
 #   Formula cells: 617
 #   Circular references: 122
+```
+
+### Import via API Mode (Optional)
+
+If you have the FastAPI backend running:
+
+```bash
+# API mode - sends request to FastAPI backend
+python scripts/excel_importer.py import \
+  --file dcmodel_template_hf_final_v32.xlsx \
+  --name "DC Model Test" \
+  --api-url http://localhost:8000 \
+  --validate
+
+# Expected output:
+# 🌐 API Mode: Using backend at http://localhost:8000
+# ✓ Upload successful. Job ID: abc-123-def-456
+# 🔄 Tracking progress via WebSocket...
+# [████████████████████████████████████████] 100.0% - complete: Import complete
+# ✓ Import successful!
 ```
 
 ### Check Results
@@ -204,10 +227,20 @@ session.close()
 
 ## 📊 Import Second Sample
 
+**Direct Mode:**
 ```bash
 python scripts/excel_importer.py import \
   --file "gpuaas_calculator v33.xlsx" \
   --name "GPUaaS Calculator" \
+  --validate
+```
+
+**API Mode:**
+```bash
+python scripts/excel_importer.py import \
+  --file "gpuaas_calculator v33.xlsx" \
+  --name "GPUaaS Calculator" \
+  --api-url http://localhost:8000 \
   --validate
 ```
 
